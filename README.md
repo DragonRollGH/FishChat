@@ -4,7 +4,7 @@ Touching fish and chatting.
 
 # Usage
 
-## Install
+### Install
 
 pip uninstall websocket
 
@@ -14,11 +14,11 @@ pip install plyer
 
 pip install prompt_toolkit
 
-## Run
+### Run
 
 python FishChat.py -c "Channel" -n "Nickname"
 
-## Hot Key
+### Hot Key
 
 - Ctrl+D: change focus between input window and print window
 
