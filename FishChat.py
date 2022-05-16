@@ -22,7 +22,6 @@ parser.add_argument("-n", required=True, help="nickname")
 args = parser.parse_args()
 
 # HChat
-# hchat = HChat("dragonroll", "dr")
 hchat = HChat(args.c, args.n)
 
 # Prompt_toolkit
@@ -52,7 +51,6 @@ def _(e):
 def _(e):
     global notify_flag
     notify_flag = 0
-    hchat.stop()
     e.app.exit()
 
 # Press U in print window will get online users
@@ -123,6 +121,7 @@ def thread_notify():
             notify_flag = 1
         sleep(0.5)
 thread = threading.Thread(target=thread_notify)
+thread.daemon = 1
 
 thread.start()
 hchat.run()

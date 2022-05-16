@@ -1,6 +1,6 @@
 import json
 import threading
-from time import sleep
+from time import sleep, time
 
 try:
     import websocket
@@ -28,15 +28,16 @@ class HChat:
         self.url = "wss://hack.chat/chat-ws"
         self.ws = websocket.WebSocket()
         self.thread = threading.Thread(target=self.recv_thread)
-        self.running = 1
+        self.thread.daemon = 1
+        self.online = 0
+        self.time = time()
 
     def run(self):
         self.thread.start()
 
     def stop(self):
-        self.running = 0
         self.ws.close()
-        print("delete")
+        exit(0)
 
     def get_usrs(self):
         self.on_set(self.usrs)
@@ -46,17 +47,20 @@ class HChat:
 
     def send_message(self, msg):
         """Sends a message on the channel."""
-        if self.ws.connected:
+        if self.ws.connected and self.online:
             self._send_packet({"cmd": "chat", "text": msg})
+
 
     def _default_callback(self, *args):
         print(*args)
 
     def _ensure_connection(self):
         """ Ensure connection is success. """
-        if not self.ws.connected and self.running:
+        if not self.ws.connected:
+            self.online = 0
             try:
                 # Connect
+                self.on_warn("Connecting to Server...")
                 self.ws.connect(self.url)
             except Exception as e:
                 print("[Error] Can't connect to the server! ")
@@ -66,8 +70,10 @@ class HChat:
             while True:
                 try:
                     # Login
-                    self._send_packet({"cmd": "join", "channel": self.channel, "nick": self.nicks[self.nicki]})
+                    self.on_warn("Try to login as "+self.get_nick())
+                    self._send_packet({"cmd": "join", "channel": self.channel, "nick": self.get_nick()})
                     res = json.loads(self.ws.recv())
+                    sleep(1)
                     if not res:
                         continue
                     if res["cmd"] == "warn" and "taken" in res["text"]:
@@ -75,25 +81,30 @@ class HChat:
                         self.nicki += 1
                         continue
                     elif res["cmd"] == "warn" and "blocked" in res["text"]:
-                        # Already login or send too fast
-                        sleep(5)
-                        break
+                        # Try too fast
+                        self.on_warn("Try too frequently, wait for 10 sec. ")
+                        sleep(10)
+                        continue
                     elif res["cmd"] == "onlineSet":
                         # Login success
+                        self.online = 1
+                        self.on_warn("Successfully login! ")
                         self.usrs = res["nicks"]
                         self.on_set(res["nicks"])
-
                         break
                 except Exception as e:
                     print("[Error] Can't login to the server! ")
                     exit(0)
+                
 
     def _send_ping(self):
         self._ensure_connection()
-        try:
-            self._send_packet({"cmd": "ping"})
-        except Exception as e:
-            self._ensure_connection()
+        if (time() - self.time) > 60:
+            self.time = time()
+            try:
+                self._send_packet({"cmd": "ping"})
+            except Exception as e:
+                self._ensure_connection()
 
     def _send_packet(self, packet):
         """Sends <packet> (<dict>) to https://hack.chat."""
@@ -101,7 +112,7 @@ class HChat:
         self.ws.send(encoded)
 
     def recv_thread(self):
-        while self.running:
+        while True:
             self._send_ping()
             try:
                 res = json.loads(self.ws.recv())
@@ -110,10 +121,9 @@ class HChat:
                     continue
                 if res["cmd"] == "chat":
                     self.on_chat(res["nick"], res["text"])
-                    if 'die' in res["text"]:
+                    if 'kick' in res["text"] and self.get_nick() in res["text"]:
                         self.send_message("WTF")
-                        self.ws.close()
-                        pass
+                        self.stop()
                 elif res["cmd"] == "onlineAdd":
                     self.usrs.append(res["nick"])
                     self.on_add(res["nick"])
@@ -121,9 +131,14 @@ class HChat:
                     self.usrs.remove(res["nick"])
                     self.on_remove(res["nick"])
                 elif res["cmd"] == "warn":
-                    self.on_warn(res["text"])
                     if "blocked" in res["text"]:
-                        sleep(5)
+                        self.on_warn("Send too fast, wait for 10 sec.")
+                        self.online = 0
+                        sleep(10)
+                        self.online = 1
+                        self.on_warn("Try again now.")
+                    else:
+                        self.on_warn(res["text"])
             except Exception as e:
                 pass
             sleep(500/1000)
