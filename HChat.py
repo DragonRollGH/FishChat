@@ -20,7 +20,7 @@ PING_DIVIDER = 4 # 3
 class HChat:
     def __init__(self, channel, nick):
         """Connects to a channel on https://hack.chat."""
-        self.url = "wss://hack.chat/chat-ws"
+        self.url = "wss://hack.chat/chat-ws" if channel != "offline" else ""
         self.channel = channel
         self.nicks = [nick]
         for i in range(2,10):

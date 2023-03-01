@@ -36,6 +36,10 @@ notifyer.icon = ""
 notify_flag = 1
 notify_amnt = 0
 
+print_lines_max = 200
+print_lines_min = 100
+print_lines_cnt = 0
+
 def notify_set(tmo):
     global notify_flag, notify_amnt
     notify_flag = tmo
@@ -70,7 +74,7 @@ fgh = FishGame.init()
 input_buffer = Buffer()
 print_buffer = Buffer()
 
-input_window = Window(BufferControl(buffer=input_buffer), height=1, wrap_lines=True)
+input_window = Window(BufferControl(buffer=input_buffer), height=1)
 print_window = Window(BufferControl(buffer=print_buffer), wrap_lines=True)
 
 root = HSplit([
@@ -80,11 +84,19 @@ root = HSplit([
 ])
 
 # Print on print_buffer
-def printf(usr, msg):
+def printf(usr, msg: str):
+    global print_lines_max, print_lines_min, print_lines_cnt
+
     t = strftime("%H:%M", localtime())
     title = "\n{:s}|{:>3s}: ".format(t, usr)
+
     if '\n' in msg:
         msg = msg.replace('\n', '\n'.ljust(len(title)))
+
+    print_lines_cnt += 1 + msg.count('\n')
+    if print_lines_cnt >= print_lines_max:
+        print_buffer.text = '\n'.join(print_buffer.text.splitlines()[-1 * print_lines_min:])
+
     print_buffer.text += title + msg
     print_buffer.cursor_position = len(print_buffer.text)
 
@@ -217,6 +229,9 @@ def on_chat(usr, msg):
                 printf("#", "done")
             elif 'ping_divider' == cmds[1]:
                 hchat.ping_divider = int(cmds[2])
+                printf("#", "done")
+            elif 'clear' == cmds[1]:
+                print_buffer.text = '\n'.join(print_buffer.text.splitlines()[-1 * int(cmds[2]):])
                 printf("#", "done")
     except:
         pass
