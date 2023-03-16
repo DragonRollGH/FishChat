@@ -2,7 +2,9 @@ import time
 import pickle
 import os
 import json
+import copy
 
+VERSION = "230316"
 
 TUI_N = "."
 TUI_O = "O"
@@ -21,8 +23,8 @@ ERR_WRONG_GMR            = "It's not your turn"
 ERR_CONFLIC_INDEX        = "Position conflict"
 ERR_WRONG_TURN           = "It's not your turn"
 ERR_INVALID_ARG          = "Unknown command"
-ERR_NO_FISHGAME          = "No game"
-ERR_NOT_END              = "Game not end"
+ERR_NO_FISHGAME          = "No game, please load or new a game"
+ERR_NOT_END              = "Game not end, please save or end first"
 ERR_ECHO_REMINDER        = "Sent reminder"
 ERR_ECHO_END             = "End the game"
 ERR_GAME_FINISHED        = "Game Finished"
@@ -30,30 +32,45 @@ ERR_GAME_FINISHED        = "Game Finished"
 HELP = """FishGame manual:
 fg                  查看当前棋盘
 fg ?                再次发送当前棋盘给对手，以防对手没看见/没收到
-fg new W H S        新建一个W宽，H高的棋盘，连续S子胜利
-                    缺省值为 9 9 5
+fg new [W H [S]]    新建一个W宽，H高的棋盘，连续S子胜利
+                    缺省值为 [11 11 [5]]
 fg X Y              在第X列，第Y行落子
-fg end              终止本轮对局
-fg kda              查看并向对方发送自己的战绩"""
+fg id               查看当前棋盘的相关信息
+fg save [NAME]      将本轮对局存档。如果输入了NAME，则保存名称为NAME
+                    不输入则使用棋盘id作为NAME
+fg load [NAME]      读取一个名为NAME的存档，不输入NAME则列举所有存档
+fg export [NAME]    导出为棋谱。如果输入了NAME，则保存名称为NAME.txt
+                    不输入则使用棋盘id作为NAME
+                    对局决出胜负时会自动导出一次
+fg end              终止本轮对局，并记平局
+fg kda              查看并向对方发送自己的战绩
+[XXX] 代表可选参数"""
 
 FP_FG_DIR = "FishGame"
 FP_FG_KDA = f"{FP_FG_DIR}/kda.json"
+FP_FG_VERSION = f"{FP_FG_DIR}/version.txt"
+FP_FG_REDIRECT = f"{FP_FG_DIR}/redirect.txt"
 FP_FGH_AUTOSAVE = f"{FP_FG_DIR}/fgh_autosave.pkl"
+FP_FGH_SAVES_DIR = f"{FP_FG_DIR}/saves"
+FP_FGH_EXPORTS_DIR = f"{FP_FG_DIR}/exports"
+
 
 class FishGame:
-    def __init__(self, w:int=9, h:int=9, s:int=5, id:str=None):
+    def __init__(self, w:int=11, h:int=11, s:int=5, id:str=None):
         t = time.localtime()
         self.id = id if id != None else f"{t.tm_mon:0>2}{t.tm_mday:0>2}{t.tm_hour:0>2}{t.tm_min:0>2}"
         self.table_w = w
         self.table_h = h
         self.table_s = s if min(w, h) > s else min(w, h)
-        self.battles = [ [ 0 for i in range(self.table_w) ] for j in range(self.table_h) ]
+        self.battles = [ [ 0 for j in range(self.table_h) ] for i in range(self.table_w) ]
         self.turn_gmr = GMR_N
-        self.step = 0
+        self.step = []
         self.gmr = GMR_N
         self.last_ij = [-1, -1]
         self.winner = GMR_N
-        # print(f"ID: {self.id} | {self.table_w}x{self.table_h} | {self.table_s} to win")
+
+    def title(self):
+        return f"ID: {self.id} | {self.table_w}x{self.table_h} | {self.table_s} to win"
 
     def render(self) -> str:
         table = ""
@@ -99,13 +116,22 @@ class FishGame:
                 table += " You Win! "
             else:
                 table += " You lose."
+            table += f"\n Game exported as <{self.id}.txt> automatically"
+        return table
+
+    def redirect_render(self):
+        table = self.render()
+        if os.path.exists(FP_FG_REDIRECT):
+            with open(FP_FG_REDIRECT, "w") as f:
+                f.write(table)
+            table = ""
         return table
 
     def run(self, i, j, gmr=GMR_N):
         i -= 1
         j -= 1
         if gmr == GMR_N:
-            gmr = GMR_O if self.turn_gmr == GMR_X else GMR_X
+            gmr = GMR_X if self.turn_gmr == GMR_O else GMR_O
 
         if self.winner != GMR_N:
             return ERR_GAME_FINISHED
@@ -120,6 +146,7 @@ class FishGame:
         self.turn_gmr = gmr
         self.last_ij[0] = i
         self.last_ij[1] = j
+        self.step.append((i+1, j+1))
 
         self.win_check()
         return ERR_NO_ERROR
@@ -166,6 +193,8 @@ class FishGameHandler:
         return False
 
     def parse(self, arg:str):
+        if self.fg:
+            self.fg.redirect_render()
         args = arg.split()
         if arg.startswith("\\fg "):
             t = int(args[1])
@@ -195,13 +224,48 @@ class FishGameHandler:
                 return self.fmt_ret(ERR_NO_FISHGAME)
             return ERR_ECHO_REMINDER, self.last_arg # cannot usr fmt_ret
 
+        elif args[0] in ["id"]:
+            if not self.fg:
+                return self.fmt_ret(ERR_NO_FISHGAME)
+            return self.fmt_ret(self.fg.title())
+
         elif args[0] in ["end"]:
+            if self.fg.winner == GMR_N:
+                self.export(self.fg.id)
+                record_kda(KDA_D)
+            print_buf = ERR_ECHO_END+f"\n Game exported as <{self.fg.id}.txt> automatically"
             self.fg = None
-            record_kda(KDA_D)
-            return self.fmt_ret(ERR_ECHO_END, args[0] if host else "")
+            return self.fmt_ret(print_buf, args[0] if host else "")
 
         elif args[0] in ["kda"]:
             return "", print_kda() # do not use fmt_ret
+
+        elif args[0] in ["save"]:
+            if not self.fg:
+                return self.fmt_ret(ERR_NO_FISHGAME)
+            print_buf = f"Game saved as <{args[1] if len(args) > 1 else self.fg.id}>, you can load or new a game now"
+            self.save(args[1] if len(args) > 1 else self.fg.id)
+            return self.fmt_ret(print_buf, arg if host else "")
+
+        elif args[0] in ["load"]:
+            saves = self.list_saves()
+            if len(args) == 1:
+                return self.fmt_ret('\n'.join(saves))
+            if args[1] not in saves:
+                return self.fmt_ret(f"No such saves <{args[1]}>\nHere are available saves:\n"+'\n'.join(saves))
+            if self.fg:
+                return self.fmt_ret(ERR_NOT_END)
+            self.load(args[1])
+            print_buf = f"Successfully loaded <{args[1] if len(args) > 1 else self.fg.id}>, enjoy"
+            print_buf += '\n' + self.fg.title()
+            print_buf += '\n' + self.fg.render()
+            return self.fmt_ret(print_buf, arg if host else "")
+
+        elif args[0] in ["export"]:
+            if not self.fg:
+                return self.fmt_ret(ERR_NO_FISHGAME)
+            self.export(args[1] if len(args) > 1 else self.fg.id)
+            return self.fmt_ret(f"Game exported as <{args[1] if len(args) > 1 else self.fg.id}.txt>")
 
         elif args[0] in ["help"]:
             return self.fmt_ret(HELP)
@@ -212,7 +276,9 @@ class FishGameHandler:
             gmr = self.fg.gmr if host else (GMR_X if self.fg.gmr == GMR_O else GMR_O)
             ret = self.fg.run(int(args[0]), int(args[1]), gmr)
             if ret == ERR_NO_ERROR:
-                return self.fmt_ret(self.fg.render(), arg if host else "")
+                if self.fg.winner != GMR_N:
+                    self.export(self.fg.id)
+                return self.fmt_ret(self.fg.redirect_render(), arg if host else "")
             else:
                 return self.fmt_ret(ret)
 
@@ -223,7 +289,7 @@ class FishGameHandler:
             self.fg.gmr = GMR_X if host else GMR_O
             self.fg.turn_gmr = GMR_X
             sendbuf = f"new {self.fg.table_w} {self.fg.table_h} {self.fg.table_s} {self.fg.id}"
-            return self.fmt_ret(self.fg.render(), sendbuf if host else "")
+            return self.fmt_ret(self.fg.title()+'\n'+self.fg.render(), sendbuf if host else "")
 
         else:
             return self.fmt_ret(ERR_INVALID_ARG)
@@ -251,17 +317,55 @@ class FishGameHandler:
         return True
 
     def autosave(self):
-        pickle.dump(self, open(FP_FGH_AUTOSAVE, "wb"))
+        with open(FP_FGH_AUTOSAVE, "wb") as f:
+            pickle.dump(self, f)
 
     def del_autosave(self):
         if os.path.exists(FP_FGH_AUTOSAVE):
             os.remove(FP_FGH_AUTOSAVE)
 
-    def save(self):
-        pass
+    def save(self, fp):
+        if not os.path.exists(FP_FGH_SAVES_DIR):
+            os.mkdir(FP_FGH_SAVES_DIR)
+        with open(f"{FP_FGH_SAVES_DIR}/{fp}.pkl", "wb") as f:
+            pickle.dump(self, f)
+        self.fg = None
+        self.last_arg = ""
+        self.last_time = 0
 
-    def load(self):
-        pass
+    def load(self, fp):
+        load_fgh: FishGameHandler
+        with open(f"{FP_FGH_SAVES_DIR}/{fp}.pkl", "rb") as f:
+            load_fgh = pickle.load(f)
+        self.fg = load_fgh.fg
+        self.last_arg = load_fgh.last_arg
+        self.last_time = load_fgh.last_time
+        os.remove(f"{FP_FGH_SAVES_DIR}/{fp}.pkl")
+
+    def list_saves(self):
+        saves = []
+        if os.path.exists(FP_FGH_SAVES_DIR):
+            for fn in os.listdir(FP_FGH_SAVES_DIR):
+                if fn.endswith(".pkl"):
+                    saves.append(fn.rstrip(".pkl"))
+        return saves
+
+    def export(self, fp):
+        tmp_fg = copy.deepcopy(self.fg)
+        tmp_fg.battles = [ [ 0 for j in range(tmp_fg.table_h) ] for i in range(tmp_fg.table_w) ]
+        tmp_fg.turn_gmr = GMR_X
+        tmp_fg.last_ij = [-1, -1]
+        tmp_fg.winner = GMR_N
+        tmp_step = copy.deepcopy(tmp_fg.step)
+        if not os.path.exists(FP_FGH_EXPORTS_DIR):
+            os.mkdir(FP_FGH_EXPORTS_DIR)
+        with open(f"{FP_FGH_EXPORTS_DIR}/{fp}.txt", "w") as f:
+            f.write(tmp_fg.title() + "\n")
+            f.write(tmp_fg.render() + "\n\n")
+            for i, (x, y) in enumerate(tmp_step):
+                f.write(f"STEP {i}: {TUI_O if tmp_fg.turn_gmr != GMR_O else TUI_X} on ({x}, {y})\n")
+                tmp_fg.run(x, y)
+                f.write(tmp_fg.render() + "\n\n")
 
 
 def record_kda(result: str):
@@ -286,15 +390,22 @@ def print_kda():
     if os.path.exists(FP_FG_KDA):
         with open(FP_FG_KDA, "r", encoding="utf-8") as f:
             kda = json.load(f)
-        return f"win ratio: {100*kda[KDA_W]/kda[KDA_T]:.2f} {kda[KDA_W]}/{kda[KDA_D]}/{kda[KDA_L]}"
+        return f"Win Ratio: {100*kda[KDA_W]/kda[KDA_T]:.2f}% | Win/Draw/Lose {kda[KDA_W]}/{kda[KDA_D]}/{kda[KDA_L]}"
     else:
         return "no kda records"
 
 
-def init():
-    if os.path.exists(FP_FGH_AUTOSAVE):
-        return pickle.load(open(FP_FGH_AUTOSAVE, "rb"))
-    else:
-        if not os.path.exists(FP_FG_DIR):
-            os.mkdir(FP_FG_DIR)
-        return FishGameHandler()
+def init() -> FishGameHandler:
+    if not os.path.exists(FP_FG_DIR):
+        os.mkdir(FP_FG_DIR)
+    ver = ""
+    if os.path.exists(FP_FG_VERSION):
+        with open(FP_FG_VERSION, "r") as f:
+            ver = f.read().strip()
+    if VERSION != ver:
+        with open(FP_FG_VERSION, "w") as f:
+            f.write(VERSION)
+    elif os.path.exists(FP_FGH_AUTOSAVE):
+        with open(FP_FGH_AUTOSAVE, "rb") as f:
+            return pickle.load(f)
+    return FishGameHandler()
