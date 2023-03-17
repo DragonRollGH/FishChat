@@ -56,8 +56,8 @@ def notify(message = "New Update"):
 
 # Parse argument
 parser = argparse.ArgumentParser()
-parser.add_argument("-c", help="channel", default="dragonroll")
-parser.add_argument("-n", help="nickname", default="default")
+parser.add_argument("-c", help="channel", default="defaultchannel")
+parser.add_argument("-n", help="nickname", default="defaultnickname")
 args = parser.parse_args()
 
 
